@@ -9,8 +9,16 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 CATEGORIES_PATH = os.path.join(os.path.dirname(__file__),"categories.json")
 mcp = FastMCP("ExpenseTracker")
 
+@mcp.tool()
+def initialize_database():
+    """Initialize the expense database table."""
+    init_db()
+    return {"status": "ok", "message": "Database initialized."}
+
 
 def get_connection():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured")
     return psycopg.connect(DATABASE_URL)
 
 
@@ -27,9 +35,6 @@ def init_db():
                     note TEXT DEFAULT ''
                 )
             """)
-
-
-init_db()
 
 
 @mcp.tool()
