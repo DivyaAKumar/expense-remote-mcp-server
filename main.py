@@ -1,7 +1,8 @@
 from fastmcp import FastMCP
 import os
-import psycopg
 from dotenv import load_dotenv
+from psycopg import AsyncConnection
+from contextlib import asynccontextmanager
 
 load_dotenv()
 
@@ -10,22 +11,23 @@ CATEGORIES_PATH = os.path.join(os.path.dirname(__file__),"categories.json")
 mcp = FastMCP("ExpenseTracker")
 
 @mcp.tool()
-def initialize_database():
+async def initialize_database():
     """Initialize the expense database table."""
-    init_db()
+    await init_db()
     return {"status": "ok", "message": "Database initialized."}
 
-
-def get_connection():
+@asynccontextmanager
+async def get_connection():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL is not configured")
-    return psycopg.connect(DATABASE_URL)
+    async with await AsyncConnection.connect(DATABASE_URL) as conn:
+        yield conn
 
 
-def init_db():
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
+async def init_db():
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
                 CREATE TABLE IF NOT EXISTS expenses (
                     id SERIAL PRIMARY KEY,
                     date DATE NOT NULL,
@@ -38,7 +40,7 @@ def init_db():
 
 
 @mcp.tool()
-def add_expense(
+async def add_expense(
     date: str,
     amount: float,
     category: str,
@@ -46,9 +48,9 @@ def add_expense(
     note: str = ""
 ):
     """Add an expense to the PostgreSQL database."""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
                 """
                 INSERT INTO expenses
                     (date, amount, category, subcategory, note)
@@ -57,17 +59,18 @@ def add_expense(
                 """,
                 (date, amount, category, subcategory, note)
             )
-            expense_id = cur.fetchone()[0]
+            row = await cur.fetchone()
+            expense_id = row[0]
 
     return {"status": "ok", "id": expense_id}
 
 
 @mcp.tool()
-def list_expenses(start_date, end_date):
+async def list_expenses(start_date, end_date):
     """List all expenses from the PostgreSQL database within an inclusive date range."""
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("""
                 SELECT id, date, amount, category, subcategory, note
                 FROM expenses
                 WHERE date BETWEEN %s AND %s
@@ -82,7 +85,7 @@ def list_expenses(start_date, end_date):
                 columns.append(desc.name)
 
             expenses = []
-            rows = cur.fetchall()
+            rows = await cur.fetchall()
             for row in rows:
                 expense = dict(zip(columns, row))
                 expenses.append(expense)
@@ -90,10 +93,10 @@ def list_expenses(start_date, end_date):
             return expenses
 
 @mcp.tool()
-def summarize(start_date, end_date, category=None):
+async def summarize(start_date, end_date, category=None):
     '''Summarize expenses by category within an inclusive date range'''
-    with get_connection() as conn:
-        with conn.cursor() as cur:
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
             query = (
                 """
                 SELECT category, SUM(amount) AS total_amount
@@ -108,13 +111,13 @@ def summarize(start_date, end_date, category=None):
 
             query+=" GROUP BY category ORDER BY category ASC"
 
-            c = cur.execute(query,params)
+            c = await cur.execute(query,params)
             cols = [d[0] for d in c.description]
-            return [dict(zip(cols,r)) for r in c.fetchall()]
+            return [dict(zip(cols,r)) for r in await c.fetchall()]
 
 
 @mcp.tool()
-def edit_expense(
+async def edit_expense(
     expense_id: int,
     date: str | None = None,
     amount: float | None = None,
@@ -147,9 +150,9 @@ def edit_expense(
     values = list(updates.values())
     values.append(expense_id)
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
                 f"""
                 UPDATE expenses
                 SET {set_clause}
@@ -158,7 +161,7 @@ def edit_expense(
                 """,
                 values
             )
-            result = cur.fetchone()
+            result = await cur.fetchone()
 
     if result is None:
         return {
@@ -170,12 +173,12 @@ def edit_expense(
 
 
 @mcp.tool()
-def delete_expense(expense_id: int):
+async def delete_expense(expense_id: int):
     """Delete an expense from the database using its ID."""
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
+    async with get_connection() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
                 """
                 DELETE FROM expenses
                 WHERE id = %s
@@ -183,7 +186,7 @@ def delete_expense(expense_id: int):
                 """,
                 (expense_id,)
             )
-            result = cur.fetchone()
+            result = await cur.fetchone()
 
     if result is None:
         return {
